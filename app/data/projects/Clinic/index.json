@@ -1,0 +1,15 @@
+{
+	"id": "Clinic",
+	"name": "Clinic",
+	"created": "Wed, 14 Jun 2017 07:00:00 GMT",
+	"models": [
+		{
+			"id": "Clinic",
+			"name": "Clinic",
+			"manifest": "manifest.json"
+		}
+	],
+	"viewerConfigs": {},
+	"viewerContent": {},
+	"viewerState": {}
+}

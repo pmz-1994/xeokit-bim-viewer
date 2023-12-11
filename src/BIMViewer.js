@@ -22,6 +22,11 @@ import {ObjectContextMenu} from "./contextMenus/ObjectContextMenu.js";
 import {CanvasContextMenu} from "./contextMenus/CanvasContextMenu.js";
 import {OrthoMode} from "./toolbar/OrthoMode.js";
 import {PropertiesInspector} from "./inspector/PropertiesInspector.js";
+import {ObjectsKdTree3} from "./collision/ObjectsKdTree3.js";
+import {MarqueeSelectionTool} from "./toolbar/MarqueeSelectionTool.js";
+import {MeasureDistanceTool} from "./toolbar/MeasureDistanceTool.js";
+import {MeasureAngleTool} from "./toolbar/MeasureAngleTool.js";
+
 
 const hideEdgesMinDrawCount = 5; // FastNavPlugin enables dynamic edges when xeokit's per-frame draw count drops below this
 const scaleCanvasResolutionMinDrawCount = 1000; // FastNavPlugin switches to low-res canvas when xeokit's per-frame draw count rises above this
@@ -72,7 +77,7 @@ function createExplorerTemplate(cfg) {
     return explorerTemplate;
 }
 
-function createToolbarTemplate() {
+function createToolbarTemplate(cfg = {}) {
     const toolbarTemplate = `<div class="xeokit-toolbar">
     <!-- Reset button -->
     <div class="xeokit-btn-group">
@@ -96,7 +101,14 @@ function createToolbarTemplate() {
         <button type="button" class="xeokit-i18n xeokit-hide xeokit-btn fa fa-eraser fa-2x disabled" data-xeokit-i18ntip="toolbar.hideObjectsTip" data-tippy-content="Hide objects"></button>
         <!-- Select tool button -->
         <button type="button" class="xeokit-i18n xeokit-select xeokit-btn fa fa-mouse-pointer fa-2x disabled" data-xeokit-i18ntip="toolbar.selectObjectsTip" data-tippy-content="Select objects"></button>    
-        <!-- section tool button -->
+          <!-- Marquee select tool button -->
+        <button type="button" class="xeokit-i18n xeokit-marquee xeokit-btn fas fa-object-group fa-2x disabled" data-xeokit-i18ntip="toolbar.marqueeSelectTip" data-tippy-content="Marquee select objects"></button>`
+        + (cfg.enableMeasurements ? `<!-- Measure distance tool button -->
+        <button type="button" class="xeokit-i18n xeokit-measure-distance xeokit-btn fa fa-ruler fa-2x disabled" data-xeokit-i18ntip="toolbar.measureDistanceTip" data-tippy-content="Measure distance"></button>  
+          <!-- Measure angle tool button -->
+        <button type="button" class="xeokit-i18n xeokit-measure-angle xeokit-btn fa fa-chevron-left fa-2x disabled" data-xeokit-i18ntip="toolbar.measureAngleTip" data-tippy-content="Measure angle"></button>`
+            : ` `)
+        + `<!-- section tool button -->
         <button type="button" class="xeokit-i18n xeokit-section xeokit-btn fa fa-cut fa-2x disabled" data-xeokit-i18ntip="toolbar.sliceObjectsTip" data-tippy-content="Slice objects">
             <div class="xeokit-i18n xeokit-section-menu-button disabled" data-xeokit-i18ntip="toolbar.slicesMenuTip"  data-tippy-content="Slices menu">
                 <span class="xeokit-arrow-down xeokit-section-menu-button-arrow"></span>
@@ -173,6 +185,7 @@ class BIMViewer extends Controller {
      * @param {Server} server Data access strategy.
      * @param {*} cfg Configuration.
      * @param {Boolean} [cfg.enableEditModels=false] Set ````true```` to show "Add", "Edit" and "Delete" options in the Models tab's context menu.
+     * @param {Boolean} [cfg.enableMeasurements=true] Set ````true```` to enable distance and angle measurements with the BIMViewer.
      * @param {Boolean} [cfg.keyboardEventsElement] Optional reference to HTML element on which key events should be handled. Defaults to the HTML Document.
      */
     constructor(server, cfg = {}) {
@@ -221,7 +234,18 @@ class BIMViewer extends Controller {
             backgroundColorFromAmbientLight: false,
             saoEnabled: true,
             pbrEnabled: false,
-            colorTextureEnabled: true
+            colorTextureEnabled: true,
+
+
+            // Enhances the efficiency of SectionPlane creation by proactively allocating Viewer resources
+            // for a specified quantity of SectionPlanes. Introducing this parameter streamlines the initial
+            // creation speed of SectionPlanes, particularly up to the designated quantity. This parameter
+            // internally configures renderer logic for the specified number of SectionPlanes, eliminating
+            // the need for setting up logic with each SectionPlane creation and thereby enhancing responsiveness.
+            // It is important to consider that each SectionPlane imposes rendering performance, so it is
+            // recommended to set this value to a quantity that aligns with your expected usage.
+
+            numCachedSectionPlanes :4
         });
 
         super(null, cfg, server, viewer);
@@ -229,6 +253,7 @@ class BIMViewer extends Controller {
         this._configs = {};
 
         this._enableAddModels = !!cfg.enableEditModels;
+        this._enableMeasurements = (cfg.enableMeasurements !== false);
         this._enablePropertiesInspector = !!cfg.inspectorElement;
 
         /**
@@ -238,11 +263,15 @@ class BIMViewer extends Controller {
          */
         this.viewer = viewer;
 
+        this._objectsKdTree3 = new ObjectsKdTree3(({
+            viewer
+        }))
+
         this._customizeViewer();
         this._initCanvasContextMenus();
 
         explorerElement.innerHTML = createExplorerTemplate(cfg);
-        toolbarElement.innerHTML = createToolbarTemplate();
+        toolbarElement.innerHTML = createToolbarTemplate({enableMeasurements: this._enableMeasurements});
         if (this._enablePropertiesInspector) {
             inspectorElement.innerHTML = createInspectorTemplate();
         }
@@ -256,6 +285,7 @@ class BIMViewer extends Controller {
         }
 
         this._modelsExplorer = new ModelsExplorer(this, {
+            enableMeasurements: this._enableMeasurements,
             modelsTabElement: explorerElement.querySelector(".xeokit-modelsTab"),
             loadModelsButtonElement: explorerElement.querySelector(".xeokit-loadAllModels"), // Can be undefined
             unloadModelsButtonElement: explorerElement.querySelector(".xeokit-unloadAllModels"),
@@ -265,6 +295,7 @@ class BIMViewer extends Controller {
         });
 
         this._objectsExplorer = new ObjectsExplorer(this, {
+            enableMeasurements: this._enableMeasurements,
             objectsTabElement: explorerElement.querySelector(".xeokit-objectsTab"),
             showAllObjectsButtonElement: explorerElement.querySelector(".xeokit-showAllObjects"),
             hideAllObjectsButtonElement: explorerElement.querySelector(".xeokit-hideAllObjects"),
@@ -272,6 +303,7 @@ class BIMViewer extends Controller {
         });
 
         this._classesExplorer = new ClassesExplorer(this, {
+            enableMeasurements: this._enableMeasurements,
             classesTabElement: explorerElement.querySelector(".xeokit-classesTab"),
             showAllClassesButtonElement: explorerElement.querySelector(".xeokit-showAllClasses"),
             hideAllClassesButtonElement: explorerElement.querySelector(".xeokit-hideAllClasses"),
@@ -279,6 +311,7 @@ class BIMViewer extends Controller {
         });
 
         this._storeysExplorer = new StoreysExplorer(this, {
+            enableMeasurements: this._enableMeasurements,
             storeysTabElement: explorerElement.querySelector(".xeokit-storeysTab"),
             showAllStoreysButtonElement: explorerElement.querySelector(".xeokit-showAllStoreys"),
             hideAllStoreysButtonElement: explorerElement.querySelector(".xeokit-hideAllStoreys"),
@@ -313,8 +346,11 @@ class BIMViewer extends Controller {
             this.setThreeDModeActive = (active) => {
                 if (active) {
                     bimViewer._firstPersonMode.setActive(false);
+                    bimViewer._marqueeSelectionTool.setEnabled(true);
                     bimViewer.viewer.cameraControl.navMode = "orbit";
                 } else {
+                    bimViewer._marqueeSelectionTool.setEnabled(false);
+                    bimViewer._marqueeSelectionTool.setActive(false);
                     bimViewer._firstPersonMode.setActive(false);
                     bimViewer.viewer.cameraControl.navMode = "planView";
                 }
@@ -325,11 +361,12 @@ class BIMViewer extends Controller {
                 bimViewer.viewer.cameraControl.navMode = active ? "firstPerson" : (threeDActive ? "orbit" : "planView");
                 firstPersonActive = active;
             };
+
         })(this);
 
         this._threeDMode = new ThreeDMode(this, {
             buttonElement: toolbarElement.querySelector(".xeokit-threeD"),
-            cameraControlNavModeMediator: cameraControlNavModeMediator,
+            cameraControlNavModeMediator,
             active: false
         });
 
@@ -340,7 +377,7 @@ class BIMViewer extends Controller {
 
         this._firstPersonMode = new FirstPersonMode(this, {
             buttonElement: toolbarElement.querySelector(".xeokit-firstPerson"),
-            cameraControlNavModeMediator: cameraControlNavModeMediator,
+            cameraControlNavModeMediator,
             active: false
         });
 
@@ -352,6 +389,12 @@ class BIMViewer extends Controller {
         this._selectionTool = new SelectionTool(this, {
             buttonElement: toolbarElement.querySelector(".xeokit-select"),
             active: false
+        });
+
+        this._marqueeSelectionTool = new MarqueeSelectionTool(this, {
+            buttonElement: toolbarElement.querySelector(".xeokit-marquee"),
+            active: false,
+            objectsKdTree3: this._objectsKdTree3
         });
 
         this._showSpacesMode = new ShowSpacesMode(this, {
@@ -368,6 +411,16 @@ class BIMViewer extends Controller {
             counterElement: toolbarElement.querySelector(".xeokit-section-counter"),
             menuButtonElement: toolbarElement.querySelector(".xeokit-section-menu-button"),
             menuButtonArrowElement: toolbarElement.querySelector(".xeokit-section-menu-button-arrow"),
+            active: false
+        });
+
+        this._measureDistanceTool = new MeasureDistanceTool(this, {
+            buttonElement: toolbarElement.querySelector(".xeokit-measure-distance"),
+            active: false
+        });
+
+        this._measureAngleTool = new MeasureAngleTool(this, {
+            buttonElement: toolbarElement.querySelector(".xeokit-measure-angle"),
             active: false
         });
 
@@ -403,7 +456,14 @@ class BIMViewer extends Controller {
             this.fire("reset", true);
         });
 
-        this._mutexActivation([this._hideTool, this._selectionTool, this._sectionTool]);
+        this._mutexActivation([
+            this._hideTool,
+            this._selectionTool,
+            this._marqueeSelectionTool,
+            this._sectionTool,
+            this._measureDistanceTool,
+            this._measureAngleTool
+        ]);
 
         explorerElement.querySelector(".xeokit-showAllObjects").addEventListener("click", (event) => {
             this.setAllObjectsVisible(true);
@@ -457,7 +517,9 @@ class BIMViewer extends Controller {
             });
         }
 
-        this._bcfViewpointsPlugin = new BCFViewpointsPlugin(this.viewer, {});
+        this._bcfViewpointsPlugin = new BCFViewpointsPlugin(this.viewer, {
+            xrayAsZeroAlpha: true
+        });
 
         this._fastNavPlugin = new FastNavPlugin(viewer, {
             hideEdges: true,
@@ -502,11 +564,18 @@ class BIMViewer extends Controller {
         scene.xrayMaterial.edgeColor = [0, 0, 0];
 
         scene.highlightMaterial.edges = true;
-        scene.highlightMaterial.edgeColor = [1, 1, 0];
-        scene.highlightMaterial.edgeAlpha = 0.9;
+        scene.highlightMaterial.edgeColor = [1, 1, 1];
+        scene.highlightMaterial.edgeAlpha = 1.0;
         scene.highlightMaterial.fill = true;
         scene.highlightMaterial.fillAlpha = 0.1;
         scene.highlightMaterial.fillColor = [1, 0, 0];
+
+        scene.selectedMaterial.edges = true;
+        scene.selectedMaterial.edgeColor = [1, 1, 1];
+        scene.selectedMaterial.edgeAlpha = 1.0;
+        scene.selectedMaterial.fill = true;
+        scene.selectedMaterial.fillAlpha = 0.1;
+        scene.selectedMaterial.fillColor = [0, 1, 0];
 
         //------------------------------------------------------------------------------------------------------------------
         // Configure points material
@@ -553,8 +622,14 @@ class BIMViewer extends Controller {
 
     _initCanvasContextMenus() {
 
-        this._canvasContextMenu = new CanvasContextMenu(this);
-        this._objectContextMenu = new ObjectContextMenu(this);
+        this._canvasContextMenu = new CanvasContextMenu(this, {
+            hideOnAction: true,
+            enableMeasurements: this._enableMeasurements
+        });
+        this._objectContextMenu = new ObjectContextMenu(this, {
+            hideOnAction: true,
+            enableMeasurements: this._enableMeasurements
+        });
 
         this.viewer.cameraControl.on("rightClick", (e) => {
 
@@ -608,8 +683,8 @@ class BIMViewer extends Controller {
             "selectedGlowThrough": true,
             "highlightGlowThrough": true,
             "backgroundColor": [1.0, 1.0, 1.0],
-            "objectColorSource": "model",
-            "externalMetadata": false
+            "externalMetadata": false,
+            "dtxEnabled": false
         });
     }
 
@@ -720,11 +795,6 @@ class BIMViewer extends Controller {
                     this._configs[name] = parseBool(value);
                     break;
 
-                case "objectColorSource":
-                    this.setObjectColorSource(value);
-                    this._configs[name] = value;
-                    break;
-
                 case "xrayContext":
                     this._configs[name] = value;
                     break;
@@ -758,8 +828,18 @@ class BIMViewer extends Controller {
                     this._showSpacesMode.setActive(value);
                     break;
 
+                case "dtxEnabled":
+                    this._configs[name] = parseBool(value);
+                    this.viewer.scene.dtxEnabled = value;
+                    break;
+
+                case "objectColors":
+                    this._configs[name] = value;
+                    this._modelsExplorer.setObjectColors(value);
+                    break;
+
                 default:
-                    this.error("setConfig() - unsupported configuration: '" + name + "'");
+                    this.warn("setConfig() - unsupported configuration: '" + name + "'");
             }
 
         } catch (e) {
@@ -1082,20 +1162,12 @@ class BIMViewer extends Controller {
      *
      * This is "model" by default.
      *
+     * @deprecated
      * @param {String} source Where colors will be loaded from - "model" or "viewer".
      */
     setObjectColorSource(source) {
-        switch (source) {
-            case "model":
-                break;
-            case "viewer":
-                break;
-            default:
-                source = "model";
-                this.error("setObjectColorSource() - Unsupported value - accepted values are 'model' and 'viewer' - defaulting to 'model'");
-                return;
-        }
-        this._objectColorSource = source;
+        console.log("BIMViewer.setObjectColorSource() is now deprecated and no longer functional. By default, " +
+            "BIMViewer.getObjectColorSource() will now always return the (formerly) default value of `model`.");
     }
 
     /**
@@ -1103,10 +1175,11 @@ class BIMViewer extends Controller {
      *
      * This is "model" by default.
      *
+     * @deprecated
      * @return {String} Where colors will be loaded from - "model" to get colors from the model, or "viewer" to get them from the viewer's built-in table of colors for IFC types.
      */
     getObjectColorSource() {
-        return this._objectColorSource || "model";
+        return "model";
     }
 
     /**
@@ -1846,10 +1919,12 @@ class BIMViewer extends Controller {
         this._queryTool.setEnabled(enabled);
         this._hideTool.setEnabled(enabled);
         this._selectionTool.setEnabled(enabled);
+        this._marqueeSelectionTool.setEnabled(enabled);
         this._showSpacesMode.setEnabled(enabled);
+        this._measureDistanceTool.setEnabled(enabled);
+        this._measureAngleTool.setEnabled(enabled);
         this._sectionTool.setEnabled(enabled);
 
-        //
         if (this._enablePropertiesInspector) {
             this._propertiesInspector.setEnabled(enabled);
         }
@@ -1890,6 +1965,19 @@ class BIMViewer extends Controller {
         this._sectionTool.clear();
     }
 
+    /**
+     * Disables all sections.
+     */
+    disableSections() {
+        this._sectionTool.disableSections();
+    }
+
+    /**
+     * Enables all sections.
+     */
+    enableSections() {
+        this._sectionTool.enableSections();
+    }
 
     /**
      * Inverts the direction of sections.
@@ -1914,6 +2002,72 @@ class BIMViewer extends Controller {
      */
     getNumSections() {
         return this._sectionTool.getNumSections();
+    }
+
+    /**
+     * Gets if measurements are enabled for this BIMViewer.
+     * This is immutable and is set via the BIMViewer constructor.
+     * @returns {boolean}
+     */
+    getEnableMeasurements() {
+        return this._enableMeasurements;
+    }
+
+    /**
+     * Clears measurements.
+     */
+    clearMeasurements() {
+        this._measureDistanceTool.clear();
+        this._measureAngleTool.clear();
+    }
+
+    /**
+     * Returns the number of measurements that currently exist.
+     *
+     * @returns {Number} The number of measurements.
+     */
+    getNumMeasurements() {
+        return this._measureDistanceTool.getNumMeasurements() + this._measureAngleTool.getNumMeasurements();
+    }
+
+    /**
+     * Sets the visibility of axis lines for measurements.
+     *
+     * So far, this only includes distance measurements. This is not relevant for angle measurements.
+     *
+     * @param {Boolean} axisVisible Set `true` to show axis wires, else `false` to hide them.
+     */
+    setMeasurementsAxisVisible(axisVisible) {
+        this._measureDistanceTool.setMeasurementsAxisVisible(axisVisible);
+    }
+
+    /**
+     * Gets the visibility of axis lines for measurements.
+     *
+     * So far, this only includes distance measurements. This is not relevant for angle measurements.
+     *
+     * @returns {Boolean}  `true` if axis wires are visible, else `false` if hidden.
+     */
+    getMeasurementsAxisVisible() {
+        return this._measureDistanceTool.getMeasurementsAxisVisible();
+    }
+
+    /**
+     * Sets whether pointer snapping is enabled for measurements.
+     *
+     * @param {Boolean} snappingEnabled Set `true` to enable snapping, else `false` to disable.
+     */
+    setMeasurementsSnappingEnabled(snappingEnabled) {
+        this._measureDistanceTool.setSnappingEnabled(snappingEnabled);
+    }
+
+    /**
+     * Gets whether pointer snapping is enabled for measurements.
+     *
+     * @returns {Boolean} `true` if snapping is enabled, else `false` if disabled.
+     */
+    getMeasurementsSnappingEnabled() {
+        return this._measureDistanceTool.getSnappingEnabled();
     }
 
     /**

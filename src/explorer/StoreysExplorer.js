@@ -45,7 +45,10 @@ class StoreysExplorer extends Controller {
             autoExpandDepth: 1
         });
 
-        this._treeViewContextMenu = new TreeViewContextMenu(this.bimViewer);
+        this._treeViewContextMenu = new TreeViewContextMenu(this.bimViewer, {
+            hideOnAction: true,
+            enableMeasurements: cfg.enableMeasurements
+        });
 
         this._treeView.on("contextmenu", (e) => {
             this._treeViewContextMenu.context = {
